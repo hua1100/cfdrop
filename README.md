@@ -55,6 +55,13 @@ Use `cfdrop report deploy` when you want to share a report, collect quick feedba
 from phones or coworkers, and let an agent read the comments back before the
 temporary account expires.
 
+Reviewers can select report text and use the floating `註解` action to attach
+feedback to that passage. Comments capture the selected text, nearby context, and
+the nearest report block selector when available. Existing comments are rendered
+back as highlights or block markers, and the Markdown export includes anchor and
+context fields so an agent can apply feedback without manually searching the
+page.
+
 ```bash
 cfdrop report deploy --directory /tmp/my-report --name my-report -y | tee /tmp/cfdrop-report-deploy.log
 LIVE_URL="$(awk '/Deployed:/{print $3}' /tmp/cfdrop-report-deploy.log)"

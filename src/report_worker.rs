@@ -19,6 +19,9 @@ const MAX_AUTHOR_BYTES = 80;
 const MAX_ANCHOR_BYTES = 1000;
 const MAX_SELECTOR_BYTES = 300;
 const MAX_PATH_BYTES = 300;
+const MAX_RANGE_BYTES = 2000;
+const MAX_BLOCK_LABEL_BYTES = 300;
+const MAX_BLOCK_KIND_BYTES = 80;
 
 function json(data, status = 200) {
   return new Response(JSON.stringify(data), {
@@ -30,7 +33,7 @@ function json(data, status = 200) {
 async function listComments(env) {
   if (env.DB) {
     const result = await env.DB.prepare(
-      "SELECT id, report_id, kind, author, body, anchor_text, selector, path, quote_context_before, quote_context_after, user_agent, ip_hash, created_at FROM comments WHERE report_id = ? ORDER BY created_at ASC"
+      "SELECT id, report_id, kind, author, body, anchor_text, selector, path, quote_context_before, quote_context_after, anchor_version, range_json, block_label, block_kind, user_agent, ip_hash, created_at FROM comments WHERE report_id = ? ORDER BY created_at ASC"
     ).bind(REPORT_ID).all();
     return result.results || [];
   }
@@ -41,7 +44,7 @@ async function listComments(env) {
 async function saveComment(env, comment) {
   if (env.DB) {
     await env.DB.prepare(
-      "INSERT INTO comments (id, report_id, kind, author, body, anchor_text, selector, path, quote_context_before, quote_context_after, user_agent, ip_hash, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+      "INSERT INTO comments (id, report_id, kind, author, body, anchor_text, selector, path, quote_context_before, quote_context_after, anchor_version, range_json, block_label, block_kind, user_agent, ip_hash, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     ).bind(
       comment.id,
       REPORT_ID,
@@ -53,6 +56,10 @@ async function saveComment(env, comment) {
       comment.path,
       comment.quote_context_before,
       comment.quote_context_after,
+      comment.anchor_version,
+      comment.range_json,
+      comment.block_label,
+      comment.block_kind,
       comment.user_agent,
       comment.ip_hash,
       comment.created_at
@@ -108,6 +115,16 @@ function normalizePath(value) {
   return optionalText(value, MAX_PATH_BYTES) || "/";
 }
 
+function optionalAnchorVersion(value) {
+  return Number.isInteger(value) && value > 0 ? value : null;
+}
+
+function optionalRangeJson(value, maxBytes) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return "";
+  const raw = JSON.stringify(value);
+  return byteLength(raw) <= maxBytes ? raw : "";
+}
+
 function escapeHtml(value) {
   return normalizeText(value)
     .replace(/&/g, "&amp;")
@@ -140,7 +157,12 @@ function commentsToMarkdown(comments) {
     lines.push(`- Author: ${escapeMarkdownInline(comment.author || "Anonymous")}`);
     lines.push(`- Path: ${escapeMarkdownInline(comment.path || "/")}`);
     if (comment.selector) lines.push(`- Section: ${escapeMarkdownInline(comment.selector)}`);
+    if (comment.block_kind || comment.block_label) {
+      lines.push(`- Block: ${escapeMarkdownInline(comment.block_kind || "block")} / ${escapeMarkdownInline(comment.block_label || "")}`);
+    }
     if (comment.anchor_text) lines.push(`- Anchor: ${escapeMarkdownInline(comment.anchor_text)}`);
+    if (comment.quote_context_before) lines.push(`- Context Before: ${escapeMarkdownInline(comment.quote_context_before)}`);
+    if (comment.quote_context_after) lines.push(`- Context After: ${escapeMarkdownInline(comment.quote_context_after)}`);
     lines.push(`- Created: ${escapeMarkdownInline(comment.created_at)}`);
     lines.push("");
     lines.push(bodyToMarkdown(comment.body));
@@ -217,6 +239,10 @@ export default {
         path: normalizePath(input.path),
         quote_context_before: optionalText(input.quote_context_before, MAX_ANCHOR_BYTES),
         quote_context_after: optionalText(input.quote_context_after, MAX_ANCHOR_BYTES),
+        anchor_version: optionalAnchorVersion(input.anchor_version),
+        range_json: optionalRangeJson(input.range, MAX_RANGE_BYTES),
+        block_label: optionalText(input.block_label, MAX_BLOCK_LABEL_BYTES),
+        block_kind: optionalText(input.block_kind, MAX_BLOCK_KIND_BYTES),
         user_agent: request.headers.get("user-agent") || "",
         ip_hash: "",
         created_at: new Date().toISOString(),
@@ -264,11 +290,31 @@ mod tests {
         assert!(script.contains(r#"const STORAGE = "d1";"#));
         assert!(script.contains("if (env.DB)"));
         assert!(script.contains(
-            "SELECT id, report_id, kind, author, body, anchor_text, selector, path, quote_context_before, quote_context_after, user_agent, ip_hash, created_at"
+            "SELECT id, report_id, kind, author, body, anchor_text, selector, path, quote_context_before, quote_context_after, anchor_version, range_json, block_label, block_kind, user_agent, ip_hash, created_at"
         ));
         assert!(script.contains("INSERT INTO comments"));
         assert!(script.contains("await listComments(env)"));
         assert!(script.contains("await saveComment(env, comment)"));
+    }
+
+    #[test]
+    fn worker_persists_anchored_comment_metadata() {
+        let script = comments_worker_script_with_storage("review-demo", "d1", None);
+        assert!(script.contains("anchor_version, range_json, block_label, block_kind"));
+        assert!(script.contains("comment.range_json"));
+        assert!(script.contains("optionalRangeJson(input.range, MAX_RANGE_BYTES)"));
+        assert!(script.contains("block_label: optionalText(input.block_label"));
+        assert!(script.contains("block_kind: optionalText(input.block_kind"));
+    }
+
+    #[test]
+    fn worker_markdown_export_includes_context_and_block_anchor() {
+        let script = comments_worker_script("review-demo", None);
+        assert!(script.contains("Context Before"));
+        assert!(script.contains("Context After"));
+        assert!(script.contains("Block:"));
+        assert!(script.contains("comment.block_kind || \"block\""));
+        assert!(script.contains("comment.block_label"));
     }
 
     #[test]
