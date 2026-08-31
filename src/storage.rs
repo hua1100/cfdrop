@@ -95,10 +95,15 @@ pub fn provision_comments_storage(
         .and_then(|v| v.as_str())
         .context("D1 create response did not include uuid/id")?
         .to_string();
-    client.execute_d1_sql(
-        account,
-        &database_id,
-        r#"
+    client.execute_d1_sql(account, &database_id, comments_schema_sql())?;
+    Ok(CommentStorage::D1 {
+        database_id,
+        database_name,
+    })
+}
+
+pub fn comments_schema_sql() -> &'static str {
+    r#"
 CREATE TABLE IF NOT EXISTS comments (
   id TEXT PRIMARY KEY,
   report_id TEXT NOT NULL,
@@ -110,22 +115,21 @@ CREATE TABLE IF NOT EXISTS comments (
   path TEXT NOT NULL DEFAULT '/',
   quote_context_before TEXT,
   quote_context_after TEXT,
+  anchor_version INTEGER,
+  range_json TEXT,
+  block_label TEXT,
+  block_kind TEXT,
   user_agent TEXT,
   ip_hash TEXT,
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS comments_report_created_idx ON comments (report_id, created_at);
-"#,
-    )?;
-    Ok(CommentStorage::D1 {
-        database_id,
-        database_name,
-    })
+"#
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{comments_database_name, CommentStorage};
+    use super::{comments_database_name, comments_schema_sql, CommentStorage};
 
     #[test]
     fn d1_binding_shape_matches_worker_metadata() {
@@ -160,5 +164,14 @@ mod tests {
         assert_eq!(binding["type"], "kv_namespace");
         assert_eq!(binding["name"], "COMMENTS");
         assert_eq!(binding["namespace_id"], "kv-id");
+    }
+
+    #[test]
+    fn comments_schema_includes_anchored_comment_columns() {
+        let schema = comments_schema_sql();
+        assert!(schema.contains("anchor_version INTEGER"));
+        assert!(schema.contains("range_json TEXT"));
+        assert!(schema.contains("block_label TEXT"));
+        assert!(schema.contains("block_kind TEXT"));
     }
 }
