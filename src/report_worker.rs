@@ -24,3 +24,17 @@ export default {{
 "#
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::comments_worker_script;
+
+    #[test]
+    fn worker_has_health_api_and_assets_fallback() {
+        let script = comments_worker_script("review-demo", None);
+        assert!(script.contains(r#"const REPORT_ID = "review-demo";"#));
+        assert!(script.contains(r#""/api/health""#));
+        assert!(script.contains("env.ASSETS.fetch(request)"));
+        assert!(!script.contains("claim-preview"));
+    }
+}

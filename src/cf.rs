@@ -292,6 +292,61 @@ impl CfClient {
         Ok(())
     }
 
+    pub fn deploy_worker_with_script(
+        &self,
+        account: &TempAccount,
+        script_name: &str,
+        completion_jwt: &str,
+        worker_script: &str,
+        run_worker_first: serde_json::Value,
+        extra_bindings: Vec<serde_json::Value>,
+    ) -> Result<()> {
+        let assets_config = json!({
+            "html_handling": "auto-trailing-slash",
+            "not_found_handling": "404-page",
+            "run_worker_first": run_worker_first
+        });
+        let mut bindings = vec![json!({ "type": "assets", "name": "ASSETS" })];
+        bindings.extend(extra_bindings);
+        let metadata = json!({
+            "assets": {
+                "jwt": completion_jwt,
+                "config": assets_config
+            },
+            "compatibility_date": "2025-01-01",
+            "main_module": "worker.mjs",
+            "bindings": bindings
+        });
+        let form = multipart::Form::new()
+            .part(
+                "worker.mjs",
+                multipart::Part::text(worker_script.to_string())
+                    .file_name("worker.mjs")
+                    .mime_str("application/javascript+module")
+                    .context("setting worker module mime")?,
+            )
+            .part(
+                "metadata",
+                multipart::Part::text(metadata.to_string())
+                    .mime_str("application/json")
+                    .context("setting metadata mime")?,
+            );
+        let resp: Envelope<Value> = self
+            .http
+            .put(format!(
+                "{API_BASE}/accounts/{}/workers/scripts/{}",
+                account.account_id, script_name
+            ))
+            .bearer_auth(&account.api_token)
+            .multipart(form)
+            .send()
+            .context("deploying worker with script")?
+            .json()
+            .context("parsing scripted deploy response")?;
+        unwrap_envelope(resp, "scripted worker deploy")?;
+        Ok(())
+    }
+
     /// Ensure the script is served on workers.dev.
     pub fn enable_workers_dev(&self, account: &TempAccount, script_name: &str) -> Result<()> {
         let resp: Envelope<Value> = self
