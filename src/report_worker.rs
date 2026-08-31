@@ -13,7 +13,12 @@ pub fn comments_worker_script_with_storage(
     let script = r##"const REPORT_ID = __REPORT_ID__;
 const AUTH = __AUTH__;
 const STORAGE = __STORAGE__;
+const MAX_REQUEST_BYTES = 8000;
 const MAX_BODY_BYTES = 4000;
+const MAX_AUTHOR_BYTES = 80;
+const MAX_ANCHOR_BYTES = 1000;
+const MAX_SELECTOR_BYTES = 300;
+const MAX_PATH_BYTES = 300;
 
 function json(data, status = 200) {
   return new Response(JSON.stringify(data), {
@@ -58,8 +63,58 @@ async function saveComment(env, comment) {
   globalThis.__comments.push(comment);
 }
 
+function normalizeString(value) {
+  if (typeof value !== "string") return "";
+  return value.replace(/\r\n/g, "\n").trim();
+}
+
 function normalizeText(value) {
-  return String(value || "").replace(/\r\n/g, "\n").trim();
+  return normalizeString(value);
+}
+
+function byteLength(value) {
+  return new TextEncoder().encode(value).length;
+}
+
+function trimToUtf8Bytes(value, maxBytes) {
+  const text = normalizeText(value);
+  if (byteLength(text) <= maxBytes) return text;
+  const encoder = new TextEncoder();
+  let output = "";
+  let used = 0;
+  for (const char of text) {
+    const bytes = encoder.encode(char).length;
+    if (used + bytes > maxBytes) break;
+    output += char;
+    used += bytes;
+  }
+  return output;
+}
+
+function optionalText(value, maxBytes) {
+  return trimToUtf8Bytes(value, maxBytes);
+}
+
+function requiredBody(value) {
+  if (typeof value !== "string") return { ok: false, error: "body must be a string" };
+  const body = normalizeString(value);
+  const size = byteLength(body);
+  if (size < 1) return { ok: false, error: "body required" };
+  if (size > MAX_BODY_BYTES) return { ok: false, error: "body too large" };
+  return { ok: true, value: body };
+}
+
+function normalizePath(value) {
+  return optionalText(value, MAX_PATH_BYTES) || "/";
+}
+
+function escapeHtml(value) {
+  return normalizeText(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
 
 function escapeMarkdownLine(value) {
@@ -95,7 +150,7 @@ function commentsToMarkdown(comments) {
 }
 
 function newCommentId() {
-  return `cmt_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+  return `cmt_${crypto.randomUUID()}`;
 }
 
 export default {
@@ -127,31 +182,41 @@ export default {
     }
 
     if (url.pathname === "/api/comments" && method === "POST") {
+      const contentType = request.headers.get("content-type") || "";
+      if (!contentType.toLowerCase().includes("application/json")) {
+        return json({ ok: false, error: "Content-Type must be application/json" }, 415);
+      }
+
       const raw = await request.text();
-      if (new TextEncoder().encode(raw).length > MAX_BODY_BYTES) {
-        return json({ ok: false, error: "body too large" }, 413);
+      if (byteLength(raw) > MAX_REQUEST_BYTES) {
+        return json({ ok: false, error: "payload too large" }, 413);
       }
 
       let input;
       try {
         input = raw ? JSON.parse(raw) : {};
       } catch (err) {
-        return json({ ok: false, error: "invalid json" }, 400);
+        return json({ ok: false, error: "Invalid JSON" }, 400);
       }
       if (!input || typeof input !== "object" || Array.isArray(input)) {
         return json({ ok: false, error: "invalid comment" }, 400);
       }
 
+      const body = requiredBody(input.body);
+      if (!body.ok) {
+        return json({ ok: false, error: body.error }, 400);
+      }
+
       const comment = {
         id: newCommentId(),
-        kind: input.kind || "comment",
-        author: input.author || "",
-        body: input.body || "",
-        anchor_text: input.anchor_text || "",
-        selector: input.selector || "",
-        path: input.path || "/",
-        quote_context_before: input.quote_context_before || "",
-        quote_context_after: input.quote_context_after || "",
+        kind: "comment",
+        author: optionalText(input.author, MAX_AUTHOR_BYTES),
+        body: body.value,
+        anchor_text: optionalText(input.anchor_text, MAX_ANCHOR_BYTES),
+        selector: optionalText(input.selector, MAX_SELECTOR_BYTES),
+        path: normalizePath(input.path),
+        quote_context_before: optionalText(input.quote_context_before, MAX_ANCHOR_BYTES),
+        quote_context_after: optionalText(input.quote_context_after, MAX_ANCHOR_BYTES),
         user_agent: request.headers.get("user-agent") || "",
         ip_hash: "",
         created_at: new Date().toISOString(),
@@ -219,5 +284,18 @@ mod tests {
             "lines.push(`- Author: ${escapeMarkdownInline(comment.author || \"Anonymous\")}`);"
         ));
         assert!(script.contains("lines.push(`- ID: ${escapeMarkdownInline(comment.id)}`);"));
+    }
+
+    #[test]
+    fn worker_limits_comment_payload_and_escapes_output() {
+        let script = comments_worker_script("review-demo", None);
+        assert!(script.contains("MAX_BODY_BYTES"));
+        assert!(script.contains("4000"));
+        assert!(script.contains("escapeHtml"));
+        assert!(script.contains("Invalid JSON"));
+        assert!(script.contains(r#"typeof value !== "string""#));
+        assert!(script.contains("body must be a string"));
+        assert!(script.contains("normalizePath(input.path)"));
+        assert!(!script.contains(r#"String(value || "")"#));
     }
 }
