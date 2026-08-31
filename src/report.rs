@@ -1,4 +1,4 @@
-use crate::{cf, manifest, report_worker, state};
+use crate::{cf, manifest, report_worker, state, storage};
 use anyhow::{bail, Context, Result};
 use base64::Engine;
 use chrono::{Duration, Utc};
@@ -108,7 +108,12 @@ pub fn deploy_report(
     );
     let session = client.start_upload_session(&account, &script_name, &entries)?;
     let completion_jwt = client.upload_assets(&account, &session, &entries)?;
-    let script = report_worker::comments_worker_script(&script_name, auth_token.as_deref());
+    let storage = storage::provision_comments_storage(&client, &account, &script_name)?;
+    let script = report_worker::comments_worker_script_with_storage(
+        &script_name,
+        storage.label(),
+        auth_token.as_deref(),
+    );
     let run_worker_first = report_run_worker_first(auth_token.as_deref());
     client.deploy_worker_with_script(
         &account,
@@ -116,7 +121,7 @@ pub fn deploy_report(
         &completion_jwt,
         &script,
         run_worker_first,
-        vec![],
+        vec![storage.binding()],
     )?;
     client.enable_workers_dev(&account, &script_name)?;
     let subdomain = client.get_subdomain(&account)?;

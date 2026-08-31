@@ -6,6 +6,7 @@ mod report;
 mod report_ui;
 mod report_worker;
 mod state;
+mod storage;
 
 use anyhow::{bail, Context, Result};
 use base64::Engine;
