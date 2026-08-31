@@ -16,7 +16,11 @@ use std::io::Write;
 use std::path::PathBuf;
 
 #[derive(Parser)]
-#[command(name = "cfdrop", version, about = "Deploy a directory to a temporary Cloudflare account and get a live workers.dev URL")]
+#[command(
+    name = "cfdrop",
+    version,
+    about = "Deploy a directory to a temporary Cloudflare account and get a live workers.dev URL"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -183,19 +187,20 @@ fn deploy(
         .canonicalize()
         .with_context(|| format!("directory not found: {}", directory.display()))?;
 
-    let script_name = sanitize_name(
-        &name.unwrap_or_else(|| {
-            directory
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_else(|| "cfdrop-site".into())
-        }),
-    );
+    let script_name = sanitize_name(&name.unwrap_or_else(|| {
+        directory
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "cfdrop-site".into())
+    }));
 
     // Optionally convert Markdown into a staged HTML directory
     let staging = if md {
         let staged = md::stage_directory(&directory)?;
-        eprintln!("Converted Markdown to mobile HTML ({} staged).", staged.display());
+        eprintln!(
+            "Converted Markdown to mobile HTML ({} staged).",
+            staged.display()
+        );
         Some(staged)
     } else {
         None
@@ -215,7 +220,11 @@ fn deploy(
     let client = cf::CfClient::new()?;
     let state_path = state::state_path()?;
     let margin = Duration::minutes(5);
-    let cached = if fresh { None } else { state::load(&state_path) };
+    let cached = if fresh {
+        None
+    } else {
+        state::load(&state_path)
+    };
 
     let (account, reused) = match cached {
         Some(acc) if acc.is_usable(Utc::now(), margin) => (acc, true),
@@ -242,7 +251,12 @@ fn deploy(
     let completion_jwt = client.upload_assets(&account, &session, &entries)?;
 
     // 4. Deploy the Worker (with optional Basic Auth guard) and enable workers.dev
-    client.deploy_worker(&account, &script_name, &completion_jwt, auth_token.as_deref())?;
+    client.deploy_worker(
+        &account,
+        &script_name,
+        &completion_jwt,
+        auth_token.as_deref(),
+    )?;
     client.enable_workers_dev(&account, &script_name)?;
     let subdomain = client.get_subdomain(&account)?;
 
@@ -312,8 +326,8 @@ fn wait_until_live(url: &str, max: std::time::Duration) -> Result<std::time::Dur
 /// POST the deployed URL to the cfdrop relay (see oablab/cfdrop-app).
 /// Never fatal: the deploy already succeeded.
 fn notify_relay(url: &str) -> Result<String> {
-    let endpoint = std::env::var("CFDROP_NOTIFY")
-        .context("CFDROP_NOTIFY must be set for --notify")?;
+    let endpoint =
+        std::env::var("CFDROP_NOTIFY").context("CFDROP_NOTIFY must be set for --notify")?;
     let token = std::env::var("CFDROP_RELAY_TOKEN")
         .context("CFDROP_RELAY_TOKEN must be set for --notify")?;
     let resp = reqwest::blocking::Client::builder()

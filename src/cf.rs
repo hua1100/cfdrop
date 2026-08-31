@@ -122,10 +122,7 @@ impl CfClient {
             .context("parsing challenge response")?;
         let ch = unwrap_envelope(resp, "challenge request")?;
 
-        eprintln!(
-            "Solving proof-of-work ({} SHA-256 hashes)...",
-            ch.k * ch.g
-        );
+        eprintln!("Solving proof-of-work ({} SHA-256 hashes)...", ch.k * ch.g);
         let checkpoints = pow::solve(&Challenge {
             seed: ch.seed,
             k: ch.k,
@@ -228,7 +225,12 @@ impl CfClient {
                 form = form.part(hash.clone(), part);
             }
 
-            eprintln!("Uploading bucket {}/{} ({} file(s))...", i + 1, total, bucket.len());
+            eprintln!(
+                "Uploading bucket {}/{} ({} file(s))...",
+                i + 1,
+                total,
+                bucket.len()
+            );
             let resp: Envelope<UploadResult> = self
                 .http
                 .post(format!(

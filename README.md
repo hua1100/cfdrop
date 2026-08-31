@@ -2,6 +2,8 @@
 
 Deploy a directory to a **temporary Cloudflare account** — no signup, no wrangler, no Node — and get a live `workers.dev` URL for browsing. Self-contained Rust CLI.
 
+Current release: `0.7.0`.
+
 ```
 cfdrop deploy --directory path/to/dir/
 ```

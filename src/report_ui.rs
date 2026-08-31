@@ -250,13 +250,13 @@ window.CFDROP_REPORT_ID = __REPORT_ID__;
     }
 }
 fn find_last_body_close(html: &str) -> Option<usize> {
-    html.match_indices(|c: char| c == '<')
+    html.match_indices('<')
         .filter_map(|(index, _)| {
             html.get(index..index + "</body>".len())
                 .filter(|tag| tag.eq_ignore_ascii_case("</body>"))
                 .map(|_| index)
         })
-        .last()
+        .next_back()
 }
 
 #[cfg(test)]

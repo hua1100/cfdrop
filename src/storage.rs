@@ -141,7 +141,10 @@ mod tests {
 
     #[test]
     fn comments_database_name_leaves_room_for_suffix() {
-        let name = comments_database_name("abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz", "abc123");
+        let name = comments_database_name(
+            "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz",
+            "abc123",
+        );
         assert!(name.ends_with("-comments"));
         assert!(name.contains("-abc123-"));
         assert!(name.len() <= 54);
