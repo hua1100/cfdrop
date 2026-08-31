@@ -71,7 +71,8 @@ pub fn deploy_report(
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| "cfdrop-report".into())
     }));
-    let entries = manifest::build_manifest(&directory)?;
+    let staged = crate::report_ui::inject_report_ui(&directory, &script_name)?;
+    let entries = manifest::build_manifest(staged.path())?;
     let total_bytes: u64 = entries.iter().map(|e| e.size).sum();
     eprintln!(
         "Found {} file(s), {:.1} KiB total.",

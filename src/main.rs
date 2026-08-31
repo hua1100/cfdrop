@@ -3,6 +3,7 @@ mod manifest;
 mod md;
 mod pow;
 mod report;
+mod report_ui;
 mod report_worker;
 mod state;
 
