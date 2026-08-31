@@ -130,8 +130,27 @@ pub fn deploy_report(
     Ok(())
 }
 
-pub fn fetch_comments(_url: &str, _format: &str) -> Result<()> {
-    bail!("report comments is not implemented yet")
+pub fn fetch_comments(url: &str, format: &str) -> Result<()> {
+    let base = url.trim_end_matches('/');
+    let endpoint = match format {
+        "json" => format!("{base}/api/comments"),
+        "md" => format!("{base}/api/comments.md"),
+        other => bail!("unsupported format: {other}"),
+    };
+    let resp = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(20))
+        .build()?
+        .get(&endpoint)
+        .send()
+        .with_context(|| format!("fetching comments from {endpoint}"))?;
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.text().unwrap_or_default();
+        let snippet: String = body.chars().take(240).collect();
+        bail!("comments endpoint {endpoint} returned {status}: {snippet}");
+    }
+    println!("{}", resp.text()?);
+    Ok(())
 }
 
 #[cfg(test)]
