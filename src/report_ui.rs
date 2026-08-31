@@ -58,6 +58,9 @@ fn inject_html(html: &str, report_id: &str) -> String {
 .cfdrop-comment-panel{position:fixed;top:0;right:0;bottom:0;z-index:9999;display:none;width:min(420px,100vw);height:100vh;overflow:auto;box-sizing:border-box;padding:16px 16px 72px;border:0;border-left:1px solid #d9cdbb;border-radius:0;background:#fffaf1;color:#24221f;box-shadow:-18px 0 44px rgba(70,49,24,.16);font:14px/1.4 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
 .cfdrop-comment-panel[data-open="true"]{display:flex;flex-direction:column;gap:12px}
 .cfdrop-comment-panel *{box-sizing:border-box}
+.cfdrop-comment-head{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.cfdrop-comment-title{margin:0;color:#24221f;font:700 16px/1.3 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+.cfdrop-comment-close{min-width:36px;min-height:36px;border:1px solid #d6c7b1;border-radius:999px;background:#fff4d8;color:#24221f;font:700 18px/1 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;cursor:pointer}
 .cfdrop-comment-panel label{display:flex;flex-direction:column;gap:4px;font-weight:650}
 .cfdrop-comment-panel input,.cfdrop-comment-panel textarea{width:100%;border:1px solid #d6c7b1;border-radius:6px;background:#fff;color:#24221f;font:inherit}
 .cfdrop-comment-panel input{min-height:36px;padding:7px 9px}
@@ -111,6 +114,19 @@ window.CFDROP_REPORT_ID = __REPORT_ID__;
   const panel = document.createElement('form');
   panel.className = 'cfdrop-comment-panel';
 
+  const panelHead = document.createElement('div');
+  panelHead.className = 'cfdrop-comment-head';
+  const panelTitle = document.createElement('p');
+  panelTitle.className = 'cfdrop-comment-title';
+  panelTitle.textContent = '留下註解';
+  const closeButton = document.createElement('button');
+  closeButton.className = 'cfdrop-comment-close';
+  closeButton.type = 'button';
+  closeButton.textContent = '×';
+  closeButton.setAttribute('aria-label', '關閉註解視窗');
+  panelHead.appendChild(panelTitle);
+  panelHead.appendChild(closeButton);
+
   const authorLabel = document.createElement('label');
   authorLabel.textContent = '名字';
   const authorInput = document.createElement('input');
@@ -142,6 +158,7 @@ window.CFDROP_REPORT_ID = __REPORT_ID__;
   const list = document.createElement('ul');
   list.className = 'cfdrop-comment-list';
 
+  panel.appendChild(panelHead);
   panel.appendChild(authorLabel);
   panel.appendChild(preview);
   panel.appendChild(bodyLabel);
@@ -316,6 +333,13 @@ window.CFDROP_REPORT_ID = __REPORT_ID__;
     blockButton.dataset.visible = 'false';
     panel.dataset.open = 'true';
     bodyInput.focus();
+  }
+
+  function closePanel() {
+    panel.dataset.open = 'false';
+    activeAnchor = null;
+    activeBlock = null;
+    updatePreview();
   }
 
   function parseRangeJson(comment) {
@@ -501,6 +525,7 @@ window.CFDROP_REPORT_ID = __REPORT_ID__;
   selectionButton.addEventListener('click', () => openPanel(activeAnchor || buildAnchorFromSelection()));
   blockButton.addEventListener('pointerdown', (event) => event.preventDefault());
   blockButton.addEventListener('click', () => openPanel(buildAnchorFromBlock(activeBlock)));
+  closeButton.addEventListener('click', closePanel);
 
   panel.addEventListener('submit', async (event) => {
     event.preventDefault();
@@ -540,6 +565,7 @@ window.CFDROP_REPORT_ID = __REPORT_ID__;
       bodyInput.value = '';
       activeAnchor = null;
       updatePreview();
+      closePanel();
       setStatus('已送出');
     } catch (err) {
       setStatus('註解功能已過期或送出失敗');
@@ -558,7 +584,11 @@ window.CFDROP_REPORT_ID = __REPORT_ID__;
     document.addEventListener('keyup', updateSelectionAction);
     document.addEventListener('mouseup', updateSelectionAction);
     document.addEventListener('touchend', () => setTimeout(updateSelectionAction, 60));
-    document.addEventListener('pointerover', (event) => updateBlockAction(closestCommentable(event.target)));
+    function handlePointerOver(event) {
+      if (event.target.closest('.cfdrop-comment-panel,.cfdrop-comment-button,.cfdrop-selection-comment-button,.cfdrop-block-comment-button')) return;
+      updateBlockAction(closestCommentable(event.target));
+    }
+    document.addEventListener('pointerover', handlePointerOver);
     document.addEventListener('focusin', (event) => updateBlockAction(closestCommentable(event.target)));
     document.addEventListener('scroll', () => {
       selectionButton.dataset.visible = 'false';
@@ -701,5 +731,38 @@ mod tests {
         assert!(html.contains("cfdrop-comment-anchor-highlight"));
         assert!(html.contains("function highlightComment(comment)"));
         assert!(html.contains("scrollIntoView"));
+    }
+
+    #[test]
+    fn injected_ui_closes_panel_after_successful_submit() {
+        let source = tempfile::tempdir().unwrap();
+        fs::write(
+            source.path().join("index.html"),
+            "<!doctype html><html><body><main><p>Alpha beta gamma</p></main></body></html>",
+        )
+        .unwrap();
+
+        let staged = inject_report_ui(source.path(), "demo").unwrap();
+        let html = fs::read_to_string(staged.path().join("index.html")).unwrap();
+        assert!(html.contains("cfdrop-comment-close"));
+        assert!(html.contains("function closePanel()"));
+        assert!(html.contains("panel.dataset.open = 'false';"));
+        assert!(html.contains("closePanel();\n      setStatus('已送出');"));
+    }
+
+    #[test]
+    fn block_comment_button_keeps_target_block_when_clicked() {
+        let source = tempfile::tempdir().unwrap();
+        fs::write(
+            source.path().join("index.html"),
+            "<!doctype html><html><body><main><section><p>Alpha beta gamma</p></section></main></body></html>",
+        )
+        .unwrap();
+
+        let staged = inject_report_ui(source.path(), "demo").unwrap();
+        let html = fs::read_to_string(staged.path().join("index.html")).unwrap();
+        assert!(html.contains("function handlePointerOver(event)"));
+        assert!(html.contains("if (event.target.closest('.cfdrop-comment-panel,.cfdrop-comment-button,.cfdrop-selection-comment-button,.cfdrop-block-comment-button')) return;"));
+        assert!(html.contains("blockButton.addEventListener('click', () => openPanel(buildAnchorFromBlock(activeBlock)))"));
     }
 }
