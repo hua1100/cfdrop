@@ -36,6 +36,8 @@ The temporary account is cached in the OS config dir (`~/Library/Application Sup
 | Command | Description |
 |---------|-------------|
 | `cfdrop deploy -d <dir> [-n name] [-y] [--fresh] [--auth user:pass] [--md]` | Bundle and deploy a directory |
+| `cfdrop report deploy -d <dir> [-n name] [-y] [--fresh] [--auth user:pass]` | Deploy a reviewable report with temporary browser comments |
+| `cfdrop report comments --url REPORT_URL [--format md\|json]` | Fetch temporary report comments for an agent |
 | `cfdrop status` | Show cached temp account, claim URL, expiry |
 | `cfdrop logout` | Forget the cached temp account |
 
@@ -44,6 +46,24 @@ The temporary account is cached in the OS config dir (`~/Library/Application Sup
 - `--auth user:pass` protects the site with HTTP Basic Auth: deploys a small guard Worker in front of the assets (`run_worker_first`) that returns 401 unless the browser sends the matching credential. Note the credential is baked into the Worker script — fine for a 60-minute preview, not a real security boundary. For long-lived sites, claim the account and use [Cloudflare Access](https://developers.cloudflare.com/cloudflare-one/policies/access/) instead (not available on temporary accounts).
 - `--md` treats the directory as Markdown: every `*.md` is converted (pulldown-cmark: tables, strikethrough, footnotes, task lists) into a dark-theme, mobile-first HTML page — vertical scrolling only, wide tables scroll inside their own block. Non-markdown files are copied through. Unless an `index.md`/`index.html` exists, an index page listing all pages as tappable cards is generated. Titles come from the first `# heading`.
 - Worker name defaults to the sanitized directory name
+
+## Temporary report comments
+
+Use `cfdrop report deploy` when you want to share a report, collect quick feedback
+from phones or coworkers, and let an agent read the comments back before the
+temporary account expires.
+
+```bash
+cfdrop report deploy --directory /tmp/my-report --name my-report -y | tee /tmp/cfdrop-report-deploy.log
+LIVE_URL="$(awk '/Deployed:/{print $3}' /tmp/cfdrop-report-deploy.log)"
+cfdrop report comments --url "${LIVE_URL}" --format md
+```
+
+Comments are stored in temporary Cloudflare storage owned by the temporary account.
+They expire with the account unless the claim URL is used. This is preview-grade
+collaboration, not a long-term comment system. By default, anyone with the
+temporary report URL can read and comment. Use `--auth user:pass` only for
+sensitive review reports.
 
 ## `--md` on a phone
 
