@@ -2,6 +2,8 @@ mod cf;
 mod manifest;
 mod md;
 mod pow;
+mod report;
+mod report_worker;
 mod state;
 
 use anyhow::{bail, Context, Result};
@@ -47,10 +49,39 @@ enum Command {
         #[arg(long)]
         notify: bool,
     },
+    /// Deploy and review a report with temporary browser comments
+    Report {
+        #[command(subcommand)]
+        command: ReportCommand,
+    },
     /// Show the cached temporary account (claim URL, expiry)
     Status,
     /// Forget the cached temporary account
     Logout,
+}
+
+#[derive(Subcommand)]
+enum ReportCommand {
+    /// Deploy a report with temporary comments API and annotation UI
+    Deploy {
+        #[arg(short, long)]
+        directory: PathBuf,
+        #[arg(short, long)]
+        name: Option<String>,
+        #[arg(short = 'y', long)]
+        yes: bool,
+        #[arg(long)]
+        fresh: bool,
+        #[arg(long, value_name = "USER:PASS")]
+        auth: Option<String>,
+    },
+    /// Fetch report comments from a deployed cfdrop report
+    Comments {
+        #[arg(long)]
+        url: String,
+        #[arg(long, default_value = "md", value_parser = ["md", "json"])]
+        format: String,
+    },
 }
 
 fn main() {
@@ -72,6 +103,16 @@ fn run() -> Result<()> {
             md,
             notify,
         } => deploy(directory, name, yes, fresh, auth, md, notify),
+        Command::Report { command } => match command {
+            ReportCommand::Deploy {
+                directory,
+                name,
+                yes,
+                fresh,
+                auth,
+            } => report::deploy_report(directory, name, yes, fresh, auth),
+            ReportCommand::Comments { url, format } => report::fetch_comments(&url, &format),
+        },
         Command::Status => status(),
         Command::Logout => {
             let path = state::state_path()?;
@@ -301,6 +342,44 @@ fn status() -> Result<()> {
         None => println!("No cached temporary account. Run `cfdrop deploy` to create one."),
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod cli_tests {
+    use super::*;
+    use clap::Parser;
+    use std::path::PathBuf;
+
+    #[test]
+    fn parses_report_deploy() {
+        let cli = Cli::parse_from([
+            "cfdrop",
+            "report",
+            "deploy",
+            "--directory",
+            "examples/report-sample",
+            "--name",
+            "review-demo",
+            "-y",
+        ]);
+
+        match cli.command {
+            Command::Report {
+                command:
+                    ReportCommand::Deploy {
+                        directory,
+                        name,
+                        yes,
+                        ..
+                    },
+            } => {
+                assert_eq!(directory, PathBuf::from("examples/report-sample"));
+                assert_eq!(name.as_deref(), Some("review-demo"));
+                assert!(yes);
+            }
+            _ => panic!("expected report deploy command"),
+        }
+    }
 }
 
 #[cfg(test)]
