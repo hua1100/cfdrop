@@ -2,7 +2,11 @@ mod cf;
 mod manifest;
 mod md;
 mod pow;
+mod report;
+mod report_ui;
+mod report_worker;
 mod state;
+mod storage;
 
 use anyhow::{bail, Context, Result};
 use base64::Engine;
@@ -12,7 +16,11 @@ use std::io::Write;
 use std::path::PathBuf;
 
 #[derive(Parser)]
-#[command(name = "cfdrop", version, about = "Deploy a directory to a temporary Cloudflare account and get a live workers.dev URL")]
+#[command(
+    name = "cfdrop",
+    version,
+    about = "Deploy a directory to a temporary Cloudflare account and get a live workers.dev URL"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -47,10 +55,39 @@ enum Command {
         #[arg(long)]
         notify: bool,
     },
+    /// Deploy and review a report with temporary browser comments
+    Report {
+        #[command(subcommand)]
+        command: ReportCommand,
+    },
     /// Show the cached temporary account (claim URL, expiry)
     Status,
     /// Forget the cached temporary account
     Logout,
+}
+
+#[derive(Subcommand)]
+enum ReportCommand {
+    /// Deploy a report with temporary comments API and annotation UI
+    Deploy {
+        #[arg(short, long)]
+        directory: PathBuf,
+        #[arg(short, long)]
+        name: Option<String>,
+        #[arg(short = 'y', long)]
+        yes: bool,
+        #[arg(long)]
+        fresh: bool,
+        #[arg(long, value_name = "USER:PASS")]
+        auth: Option<String>,
+    },
+    /// Fetch report comments from a deployed cfdrop report
+    Comments {
+        #[arg(long)]
+        url: String,
+        #[arg(long, default_value = "md", value_parser = ["md", "json"])]
+        format: String,
+    },
 }
 
 fn main() {
@@ -72,6 +109,16 @@ fn run() -> Result<()> {
             md,
             notify,
         } => deploy(directory, name, yes, fresh, auth, md, notify),
+        Command::Report { command } => match command {
+            ReportCommand::Deploy {
+                directory,
+                name,
+                yes,
+                fresh,
+                auth,
+            } => report::deploy_report(directory, name, yes, fresh, auth),
+            ReportCommand::Comments { url, format } => report::fetch_comments(&url, &format),
+        },
         Command::Status => status(),
         Command::Logout => {
             let path = state::state_path()?;
@@ -140,19 +187,20 @@ fn deploy(
         .canonicalize()
         .with_context(|| format!("directory not found: {}", directory.display()))?;
 
-    let script_name = sanitize_name(
-        &name.unwrap_or_else(|| {
-            directory
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_else(|| "cfdrop-site".into())
-        }),
-    );
+    let script_name = sanitize_name(&name.unwrap_or_else(|| {
+        directory
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "cfdrop-site".into())
+    }));
 
     // Optionally convert Markdown into a staged HTML directory
     let staging = if md {
         let staged = md::stage_directory(&directory)?;
-        eprintln!("Converted Markdown to mobile HTML ({} staged).", staged.display());
+        eprintln!(
+            "Converted Markdown to mobile HTML ({} staged).",
+            staged.display()
+        );
         Some(staged)
     } else {
         None
@@ -172,7 +220,11 @@ fn deploy(
     let client = cf::CfClient::new()?;
     let state_path = state::state_path()?;
     let margin = Duration::minutes(5);
-    let cached = if fresh { None } else { state::load(&state_path) };
+    let cached = if fresh {
+        None
+    } else {
+        state::load(&state_path)
+    };
 
     let (account, reused) = match cached {
         Some(acc) if acc.is_usable(Utc::now(), margin) => (acc, true),
@@ -199,7 +251,12 @@ fn deploy(
     let completion_jwt = client.upload_assets(&account, &session, &entries)?;
 
     // 4. Deploy the Worker (with optional Basic Auth guard) and enable workers.dev
-    client.deploy_worker(&account, &script_name, &completion_jwt, auth_token.as_deref())?;
+    client.deploy_worker(
+        &account,
+        &script_name,
+        &completion_jwt,
+        auth_token.as_deref(),
+    )?;
     client.enable_workers_dev(&account, &script_name)?;
     let subdomain = client.get_subdomain(&account)?;
 
@@ -269,8 +326,8 @@ fn wait_until_live(url: &str, max: std::time::Duration) -> Result<std::time::Dur
 /// POST the deployed URL to the cfdrop relay (see oablab/cfdrop-app).
 /// Never fatal: the deploy already succeeded.
 fn notify_relay(url: &str) -> Result<String> {
-    let endpoint = std::env::var("CFDROP_NOTIFY")
-        .context("CFDROP_NOTIFY must be set for --notify")?;
+    let endpoint =
+        std::env::var("CFDROP_NOTIFY").context("CFDROP_NOTIFY must be set for --notify")?;
     let token = std::env::var("CFDROP_RELAY_TOKEN")
         .context("CFDROP_RELAY_TOKEN must be set for --notify")?;
     let resp = reqwest::blocking::Client::builder()
@@ -301,6 +358,44 @@ fn status() -> Result<()> {
         None => println!("No cached temporary account. Run `cfdrop deploy` to create one."),
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod cli_tests {
+    use super::*;
+    use clap::Parser;
+    use std::path::PathBuf;
+
+    #[test]
+    fn parses_report_deploy() {
+        let cli = Cli::parse_from([
+            "cfdrop",
+            "report",
+            "deploy",
+            "--directory",
+            "examples/report-sample",
+            "--name",
+            "review-demo",
+            "-y",
+        ]);
+
+        match cli.command {
+            Command::Report {
+                command:
+                    ReportCommand::Deploy {
+                        directory,
+                        name,
+                        yes,
+                        ..
+                    },
+            } => {
+                assert_eq!(directory, PathBuf::from("examples/report-sample"));
+                assert_eq!(name.as_deref(), Some("review-demo"));
+                assert!(yes);
+            }
+            _ => panic!("expected report deploy command"),
+        }
+    }
 }
 
 #[cfg(test)]

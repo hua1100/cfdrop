@@ -37,6 +37,24 @@ fn unwrap_envelope<T>(env: Envelope<T>, what: &str) -> Result<T> {
     env.result.ok_or_else(|| anyhow!("{what}: empty result"))
 }
 
+fn validate_d1_query_results(result: &Value) -> Result<()> {
+    let results = result
+        .as_array()
+        .with_context(|| format!("D1 SQL execution result was not an array: {result}"))?;
+    for (i, item) in results.iter().enumerate() {
+        match item.get("success").and_then(Value::as_bool) {
+            Some(true) => {}
+            _ => bail!(
+                "D1 SQL execution result {} failed: {}; full result: {}",
+                i + 1,
+                item,
+                result
+            ),
+        }
+    }
+    Ok(())
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ChallengeResult {
@@ -104,10 +122,7 @@ impl CfClient {
             .context("parsing challenge response")?;
         let ch = unwrap_envelope(resp, "challenge request")?;
 
-        eprintln!(
-            "Solving proof-of-work ({} SHA-256 hashes)...",
-            ch.k * ch.g
-        );
+        eprintln!("Solving proof-of-work ({} SHA-256 hashes)...", ch.k * ch.g);
         let checkpoints = pow::solve(&Challenge {
             seed: ch.seed,
             k: ch.k,
@@ -210,7 +225,12 @@ impl CfClient {
                 form = form.part(hash.clone(), part);
             }
 
-            eprintln!("Uploading bucket {}/{} ({} file(s))...", i + 1, total, bucket.len());
+            eprintln!(
+                "Uploading bucket {}/{} ({} file(s))...",
+                i + 1,
+                total,
+                bucket.len()
+            );
             let resp: Envelope<UploadResult> = self
                 .http
                 .post(format!(
@@ -292,6 +312,100 @@ impl CfClient {
         Ok(())
     }
 
+    pub fn deploy_worker_with_script(
+        &self,
+        account: &TempAccount,
+        script_name: &str,
+        completion_jwt: &str,
+        worker_script: &str,
+        run_worker_first: serde_json::Value,
+        extra_bindings: Vec<serde_json::Value>,
+    ) -> Result<()> {
+        let assets_config = json!({
+            "html_handling": "auto-trailing-slash",
+            "not_found_handling": "404-page",
+            "run_worker_first": run_worker_first
+        });
+        let mut bindings = vec![json!({ "type": "assets", "name": "ASSETS" })];
+        bindings.extend(extra_bindings);
+        let metadata = json!({
+            "assets": {
+                "jwt": completion_jwt,
+                "config": assets_config
+            },
+            "compatibility_date": "2025-01-01",
+            "main_module": "worker.mjs",
+            "bindings": bindings
+        });
+        let form = multipart::Form::new()
+            .part(
+                "worker.mjs",
+                multipart::Part::text(worker_script.to_string())
+                    .file_name("worker.mjs")
+                    .mime_str("application/javascript+module")
+                    .context("setting worker module mime")?,
+            )
+            .part(
+                "metadata",
+                multipart::Part::text(metadata.to_string())
+                    .mime_str("application/json")
+                    .context("setting metadata mime")?,
+            );
+        let resp: Envelope<Value> = self
+            .http
+            .put(format!(
+                "{API_BASE}/accounts/{}/workers/scripts/{}",
+                account.account_id, script_name
+            ))
+            .bearer_auth(&account.api_token)
+            .multipart(form)
+            .send()
+            .context("deploying worker with script")?
+            .json()
+            .context("parsing scripted deploy response")?;
+        unwrap_envelope(resp, "scripted worker deploy")?;
+        Ok(())
+    }
+
+    pub fn create_d1_database(&self, account: &TempAccount, name: &str) -> Result<Value> {
+        let resp: Envelope<Value> = self
+            .http
+            .post(format!(
+                "{API_BASE}/accounts/{}/d1/database",
+                account.account_id
+            ))
+            .bearer_auth(&account.api_token)
+            .json(&json!({ "name": name }))
+            .send()
+            .context("creating D1 database")?
+            .json()
+            .context("parsing D1 create response")?;
+        unwrap_envelope(resp, "D1 database creation")
+    }
+
+    pub fn execute_d1_sql(
+        &self,
+        account: &TempAccount,
+        database_id: &str,
+        sql: &str,
+    ) -> Result<Value> {
+        let resp: Envelope<Value> = self
+            .http
+            .post(format!(
+                "{API_BASE}/accounts/{}/d1/database/{}/query",
+                account.account_id, database_id
+            ))
+            .bearer_auth(&account.api_token)
+            .json(&json!({ "sql": sql }))
+            .send()
+            .context("executing D1 SQL")?
+            .json()
+            .context("parsing D1 query response")?;
+        let result = unwrap_envelope(resp, "D1 SQL execution")?;
+        validate_d1_query_results(&result)?;
+        Ok(result)
+    }
+
     /// Ensure the script is served on workers.dev.
     pub fn enable_workers_dev(&self, account: &TempAccount, script_name: &str) -> Result<()> {
         let resp: Envelope<Value> = self
@@ -356,7 +470,7 @@ export default {{
 
 #[cfg(test)]
 mod tests {
-    use super::auth_worker_script;
+    use super::{auth_worker_script, validate_d1_query_results};
 
     #[test]
     fn auth_script_embeds_token_and_falls_through_to_assets() {
@@ -365,5 +479,28 @@ mod tests {
         assert!(s.contains("env.ASSETS.fetch(request)"));
         assert!(s.contains("WWW-Authenticate"));
         assert!(s.contains("status: 401"));
+    }
+
+    #[test]
+    fn d1_query_validation_rejects_failed_statement_result() {
+        let result = serde_json::json!([
+            { "success": true },
+            { "success": false, "error": "syntax error near CREATE" }
+        ]);
+
+        let err = validate_d1_query_results(&result).unwrap_err().to_string();
+
+        assert!(err.contains("D1 SQL execution result 2 failed"));
+        assert!(err.contains("syntax error near CREATE"));
+    }
+
+    #[test]
+    fn d1_query_validation_rejects_missing_statement_success() {
+        let result = serde_json::json!([{ "success": true }, { "meta": {} }]);
+
+        let err = validate_d1_query_results(&result).unwrap_err().to_string();
+
+        assert!(err.contains("D1 SQL execution result 2 failed"));
+        assert!(err.contains(r#""meta""#));
     }
 }

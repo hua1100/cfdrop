@@ -41,8 +41,7 @@ pub fn load(path: &PathBuf) -> Option<TempAccount> {
 
 pub fn save(path: &PathBuf, account: &TempAccount) -> Result<()> {
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("creating {}", parent.display()))?;
+        fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
     }
     let raw = serde_json::to_string_pretty(account)?;
     fs::write(path, raw).with_context(|| format!("writing {}", path.display()))?;

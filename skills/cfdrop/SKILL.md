@@ -46,6 +46,29 @@ return a live `workers.dev` URL. Sites live ~60 minutes unless claimed.
    user can keep the account. The claim URL is a bearer credential — show it to the
    user, never publish it on the site itself.
 
+## Temporary report comments
+
+When the user wants coworkers to review a report on phones and the feedback only
+needs to live during the temporary account window, use:
+
+```bash
+cfdrop report deploy --directory /tmp/<slug>-report --name <slug> -y | tee /tmp/<slug>-report-deploy.log
+LIVE_URL="$(awk '/Deployed:/{print $3}' /tmp/<slug>-report-deploy.log)"
+```
+
+By default, anyone with the temporary report URL can read and comment. Use
+`--auth user:pass` when the review report is sensitive enough to need a shared
+HTTP Basic Auth gate during the preview window.
+
+After reviewers comment, fetch feedback for the agent:
+
+```bash
+cfdrop report comments --url "$LIVE_URL" --format md
+```
+
+Then edit the local report and redeploy. Do not promise comments survive account
+expiry unless the user claims the account.
+
 ## Mobile design rules (non-negotiable)
 
 - **Vertical scrolling only.** `html,body { overflow-x:hidden }`, `* { min-width:0 }`,

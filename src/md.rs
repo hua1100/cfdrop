@@ -135,9 +135,8 @@ pub fn md_to_html(md: &str) -> String {
                     // is decoded by the browser, so escaping is safe here.
                     format!(r#"<pre class="mermaid">{}</pre>"#, escape(&code))
                 } else {
-                    highlight(&code, &lang).unwrap_or_else(|| {
-                        format!("<pre><code>{}</code></pre>", escape(&code))
-                    })
+                    highlight(&code, &lang)
+                        .unwrap_or_else(|| format!("<pre><code>{}</code></pre>", escape(&code)))
                 };
                 events.push(Event::Html(block.into()));
             }
@@ -191,10 +190,7 @@ pub fn stage_directory(src: &Path) -> Result<PathBuf> {
     }
     static STAGE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let seq = STAGE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let dest = std::env::temp_dir().join(format!(
-        "cfdrop-md-stage-{}-{seq}",
-        std::process::id()
-    ));
+    let dest = std::env::temp_dir().join(format!("cfdrop-md-stage-{}-{seq}", std::process::id()));
     let _ = fs::remove_dir_all(&dest);
     fs::create_dir_all(&dest).context("creating staging directory")?;
 
@@ -234,7 +230,11 @@ pub fn stage_directory(src: &Path) -> Result<PathBuf> {
         if is_md {
             let raw = fs::read_to_string(item.path())
                 .with_context(|| format!("reading {}", item.path().display()))?;
-            let stem = rel.file_stem().unwrap_or_default().to_string_lossy().to_string();
+            let stem = rel
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
             let title = title_of(&raw, &stem);
             let rel_str = out_rel.to_string_lossy().replace('\\', "/");
             let is_index = rel_str == "index.html";
@@ -289,7 +289,10 @@ pub fn stage_directory(src: &Path) -> Result<PathBuf> {
             })
             .collect();
         let body = format!("<h1>{}</h1>{cards}", escape(&dir_name));
-        fs::write(dest.join("index.html"), render_page(&dir_name, &body, false))?;
+        fs::write(
+            dest.join("index.html"),
+            render_page(&dir_name, &body, false),
+        )?;
     }
 
     Ok(dest)
@@ -310,14 +313,23 @@ mod tests {
     #[test]
     fn highlights_known_language() {
         let out = md_to_html("```rust\nlet x: u32 = 1;\n```\n");
-        assert!(out.contains("<span style=\"color:"), "expected colored spans, got: {out}");
-        assert!(!out.contains("<pre style="), "pre background must be stripped");
+        assert!(
+            out.contains("<span style=\"color:"),
+            "expected colored spans, got: {out}"
+        );
+        assert!(
+            !out.contains("<pre style="),
+            "pre background must be stripped"
+        );
     }
 
     #[test]
     fn typescript_fence_highlights_via_js_alias() {
         let out = md_to_html("```ts\nconst x = { a: 1 };\n```\n");
-        assert!(out.contains("<span style=\"color:"), "ts should highlight via js alias: {out}");
+        assert!(
+            out.contains("<span style=\"color:"),
+            "ts should highlight via js alias: {out}"
+        );
     }
 
     #[test]
@@ -347,7 +359,11 @@ mod tests {
         let src = std::env::temp_dir().join(format!("cfdrop-md-src-mm-{}", std::process::id()));
         let _ = fs::remove_dir_all(&src);
         fs::create_dir_all(&src).unwrap();
-        fs::write(src.join("diagram.md"), "# D\n\n```mermaid\ngraph TD\nA-->B\n```\n").unwrap();
+        fs::write(
+            src.join("diagram.md"),
+            "# D\n\n```mermaid\ngraph TD\nA-->B\n```\n",
+        )
+        .unwrap();
         fs::write(src.join("plain.md"), "# P\n\ntext only").unwrap();
 
         let dest = stage_directory(&src).unwrap();
