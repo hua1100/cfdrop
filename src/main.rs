@@ -56,7 +56,11 @@ enum Command {
         #[arg(long)]
         notify: bool,
         /// Protect every asset behind a temporary bearer URL
-        #[arg(long, conflicts_with_all = ["auth", "notify", "md"])]
+        #[arg(
+            long,
+            requires = "fresh",
+            conflicts_with_all = ["auth", "notify", "md"]
+        )]
         signed_link: bool,
         /// Maximum lifetime of a signed link
         #[arg(
@@ -228,6 +232,9 @@ fn deploy(options: DeployOptions) -> Result<()> {
     if signed_link && !fresh {
         bail!("--signed-link requires --fresh");
     }
+    if signed_link && min_valid_for_seconds >= expires_in_seconds {
+        bail!("--min-valid-for-seconds must be less than --expires-in-seconds");
+    }
 
     // Validate and encode the Basic Auth credential up front
     let auth_token = match &auth {
@@ -360,6 +367,10 @@ fn deploy(options: DeployOptions) -> Result<()> {
         .unwrap_or(account.account_expires_at);
     let minutes_left = (account.claim_expires_at - Utc::now()).num_minutes().max(0);
 
+    if signed_access.is_some() {
+        signed::ensure_minimum_remaining_lifetime(Utc::now(), expires_at, min_valid_for_seconds)?;
+    }
+
     if json {
         println!(
             "{}",
@@ -478,6 +489,22 @@ mod cli_tests {
     use clap::Parser;
     use std::path::PathBuf;
 
+    fn signed_options(expires_in_seconds: u64, min_valid_for_seconds: u64) -> DeployOptions {
+        DeployOptions {
+            directory: PathBuf::from("path-that-must-not-be-read"),
+            name: None,
+            yes: true,
+            fresh: true,
+            auth: None,
+            md: false,
+            notify: false,
+            signed_link: true,
+            expires_in_seconds,
+            min_valid_for_seconds,
+            json: true,
+        }
+    }
+
     #[test]
     fn parses_signed_machine_deploy() {
         let cli = Cli::try_parse_from([
@@ -526,6 +553,33 @@ mod cli_tests {
         ]);
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn rejects_signed_deploy_without_fresh() {
+        let result =
+            Cli::try_parse_from(["cfdrop", "deploy", "-d", "site", "--signed-link", "--json"]);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn rejects_json_notify_deploy() {
+        let result = Cli::try_parse_from(["cfdrop", "deploy", "-d", "site", "--json", "--notify"]);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn rejects_minimum_lifetime_not_less_than_requested_before_filesystem_or_network() {
+        for minimum in [300, 301] {
+            let error = deploy(signed_options(300, minimum)).unwrap_err();
+
+            assert_eq!(
+                error.to_string(),
+                "--min-valid-for-seconds must be less than --expires-in-seconds"
+            );
+        }
     }
 
     #[test]

@@ -50,6 +50,21 @@ pub fn effective_expiry(
     Ok(expires_at)
 }
 
+pub fn ensure_minimum_remaining_lifetime(
+    now: DateTime<Utc>,
+    expires_at: DateTime<Utc>,
+    min_valid_for_seconds: u64,
+) -> Result<()> {
+    let minimum_lifetime = seconds(min_valid_for_seconds, "minimum lifetime")?;
+    let minimum_expiry = now
+        .checked_add_signed(minimum_lifetime)
+        .context("minimum signed-link expiry is out of range")?;
+    if expires_at < minimum_expiry {
+        bail!("signed link no longer has the minimum required lifetime");
+    }
+    Ok(())
+}
+
 pub fn access_url(deployment_url: &str, token: &str) -> Result<String> {
     validate_token(token)?;
     let mut url = reqwest::Url::parse(deployment_url).context("invalid deployment URL")?;
@@ -154,8 +169,37 @@ fn validate_token(token: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{effective_expiry, generate_bearer_token, signed_worker_script};
+    use super::{
+        effective_expiry, ensure_minimum_remaining_lifetime, generate_bearer_token,
+        signed_worker_script, MachineDeployOutput,
+    };
     use chrono::{Duration, TimeZone, Utc};
+    use std::collections::BTreeSet;
+
+    #[test]
+    fn machine_output_has_exact_public_fields() {
+        let json = serde_json::to_value(MachineDeployOutput {
+            deployment_url: "https://site.example.workers.dev",
+            access_url: "https://site.example.workers.dev/_cfdrop/token/",
+            expires_at: "2026-09-12T12:55:00Z".into(),
+        })
+        .unwrap();
+        assert_eq!(
+            json.as_object()
+                .unwrap()
+                .keys()
+                .cloned()
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                "access_url".into(),
+                "deployment_url".into(),
+                "expires_at".into()
+            ])
+        );
+        let rendered = json.to_string();
+        assert!(!rendered.contains("claim"));
+        assert!(!rendered.contains("api_token"));
+    }
 
     #[test]
     fn token_is_256_bit_base64url() {
@@ -174,6 +218,20 @@ mod tests {
             effective_expiry(now, 3600, account, 60, 300).unwrap(),
             account - Duration::seconds(60)
         );
+    }
+
+    #[test]
+    fn rejects_insufficient_remaining_lifetime() {
+        let now = Utc::now();
+        assert!(effective_expiry(now, 3600, now + Duration::seconds(200), 60, 300).is_err());
+    }
+
+    #[test]
+    fn recheck_rejects_lifetime_consumed_during_deploy() {
+        let now = Utc.with_ymd_and_hms(2026, 9, 12, 12, 0, 0).unwrap();
+        let expires_at = now + Duration::seconds(299);
+
+        assert!(ensure_minimum_remaining_lifetime(now, expires_at, 300).is_err());
     }
 
     #[test]
