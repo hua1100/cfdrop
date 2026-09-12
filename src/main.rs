@@ -5,6 +5,7 @@ mod pow;
 mod report;
 mod report_ui;
 mod report_worker;
+mod signed;
 mod state;
 mod storage;
 
@@ -54,6 +55,26 @@ enum Command {
         /// CFDROP_RELAY_TOKEN.
         #[arg(long)]
         notify: bool,
+        /// Protect every asset behind a temporary bearer URL
+        #[arg(long, conflicts_with = "auth")]
+        signed_link: bool,
+        /// Maximum lifetime of a signed link
+        #[arg(
+            long,
+            default_value_t = 3600,
+            value_parser = clap::value_parser!(u64).range(60..=3600)
+        )]
+        expires_in_seconds: u64,
+        /// Fail if the signed link cannot remain usable for this long
+        #[arg(
+            long,
+            default_value_t = 300,
+            value_parser = clap::value_parser!(u64).range(60..=3300)
+        )]
+        min_valid_for_seconds: u64,
+        /// Print a machine-readable deployment result
+        #[arg(long, conflicts_with = "notify")]
+        json: bool,
     },
     /// Deploy and review a report with temporary browser comments
     Report {
@@ -108,7 +129,23 @@ fn run() -> Result<()> {
             auth,
             md,
             notify,
-        } => deploy(directory, name, yes, fresh, auth, md, notify),
+            signed_link,
+            expires_in_seconds,
+            min_valid_for_seconds,
+            json,
+        } => deploy(DeployOptions {
+            directory,
+            name,
+            yes,
+            fresh,
+            auth,
+            md,
+            notify,
+            signed_link,
+            expires_in_seconds,
+            min_valid_for_seconds,
+            json,
+        }),
         Command::Report { command } => match command {
             ReportCommand::Deploy {
                 directory,
@@ -160,7 +197,7 @@ fn confirm_terms() -> Result<bool> {
     Ok(matches!(line.trim().to_lowercase().as_str(), "y" | "yes"))
 }
 
-fn deploy(
+struct DeployOptions {
     directory: PathBuf,
     name: Option<String>,
     yes: bool,
@@ -168,7 +205,30 @@ fn deploy(
     auth: Option<String>,
     md: bool,
     notify: bool,
-) -> Result<()> {
+    signed_link: bool,
+    expires_in_seconds: u64,
+    min_valid_for_seconds: u64,
+    json: bool,
+}
+
+fn deploy(options: DeployOptions) -> Result<()> {
+    let DeployOptions {
+        directory,
+        name,
+        yes,
+        fresh,
+        auth,
+        md,
+        notify,
+        signed_link,
+        expires_in_seconds,
+        min_valid_for_seconds,
+        json,
+    } = options;
+    if signed_link && !fresh {
+        bail!("--signed-link requires --fresh");
+    }
+
     // Validate and encode the Basic Auth credential up front
     let auth_token = match &auth {
         Some(cred) => {
@@ -246,31 +306,83 @@ fn deploy(
         account.account_expires_at.format("%H:%M UTC")
     );
 
+    let signed_access = if signed_link {
+        let expires_at = signed::effective_expiry(
+            Utc::now(),
+            expires_in_seconds,
+            account.account_expires_at,
+            60,
+            min_valid_for_seconds,
+        )?;
+        Some(signed::SignedAccess {
+            token: signed::generate_bearer_token()?,
+            expires_at,
+        })
+    } else {
+        None
+    };
+
     // 3. Upload assets
     let session = client.start_upload_session(&account, &script_name, &entries)?;
     let completion_jwt = client.upload_assets(&account, &session, &entries)?;
 
-    // 4. Deploy the Worker (with optional Basic Auth guard) and enable workers.dev
-    client.deploy_worker(
-        &account,
-        &script_name,
-        &completion_jwt,
-        auth_token.as_deref(),
-    )?;
+    // 4. Deploy the Worker (with an optional access guard) and enable workers.dev
+    if let Some(access) = &signed_access {
+        let script = signed::signed_worker_script(&access.token, access.expires_at.timestamp())?;
+        client.deploy_worker_with_script(
+            &account,
+            &script_name,
+            &completion_jwt,
+            &script,
+            serde_json::json!(true),
+            vec![],
+        )?;
+    } else {
+        client.deploy_worker(
+            &account,
+            &script_name,
+            &completion_jwt,
+            auth_token.as_deref(),
+        )?;
+    }
     client.enable_workers_dev(&account, &script_name)?;
     let subdomain = client.get_subdomain(&account)?;
 
     let url = format!("https://{script_name}.{subdomain}.workers.dev");
+    let access_url = signed_access
+        .as_ref()
+        .map(|access| signed::access_url(&url, &access.token))
+        .transpose()?
+        .unwrap_or_else(|| url.clone());
+    let expires_at = signed_access
+        .as_ref()
+        .map(|access| access.expires_at)
+        .unwrap_or(account.account_expires_at);
     let minutes_left = (account.claim_expires_at - Utc::now()).num_minutes().max(0);
 
-    println!();
-    println!("✅ Deployed: {url}");
-    if auth_token.is_some() {
-        println!("   Protected with HTTP Basic Auth (--auth).");
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string(&signed::MachineDeployOutput {
+                deployment_url: &url,
+                access_url: &access_url,
+                expires_at: expires_at.to_rfc3339(),
+            })?
+        );
+    } else {
+        println!();
+        println!("✅ Deployed: {access_url}");
+        if auth_token.is_some() {
+            println!("   Protected with HTTP Basic Auth (--auth).");
+        }
+        if signed_access.is_some() {
+            println!("   Signed link expires: {}", expires_at.to_rfc3339());
+        } else {
+            println!();
+            println!("This temporary account expires in ~{minutes_left} minutes.");
+            println!("Keep it by claiming: {}", account.claim_url);
+        }
     }
-    println!();
-    println!("This temporary account expires in ~{minutes_left} minutes.");
-    println!("Keep it by claiming: {}", account.claim_url);
     if notify {
         // A fresh workers.dev deployment can take a few seconds to propagate;
         // opening it on the viewer too early shows a blank page. Wait until
@@ -365,6 +477,41 @@ mod cli_tests {
     use super::*;
     use clap::Parser;
     use std::path::PathBuf;
+
+    #[test]
+    fn parses_signed_machine_deploy() {
+        let cli = Cli::try_parse_from([
+            "cfdrop",
+            "deploy",
+            "-d",
+            "site",
+            "-y",
+            "--fresh",
+            "--signed-link",
+            "--expires-in-seconds",
+            "300",
+            "--min-valid-for-seconds",
+            "240",
+            "--json",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Command::Deploy {
+                signed_link,
+                expires_in_seconds,
+                min_valid_for_seconds,
+                json,
+                ..
+            } => {
+                assert!(signed_link);
+                assert_eq!(expires_in_seconds, 300);
+                assert_eq!(min_valid_for_seconds, 240);
+                assert!(json);
+            }
+            _ => panic!("expected deploy"),
+        }
+    }
 
     #[test]
     fn parses_report_deploy() {
