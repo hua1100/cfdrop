@@ -16,6 +16,44 @@ job_block() {
 macos_job=$(job_block macos)
 create_release_job=$(job_block create-release)
 
+active_macos_job=$(sed '/^[[:space:]]*#/d' <<< "$macos_job")
+
+has_macos_draft_check() {
+  awk \
+    -v first='          release_is_draft=$(gh release view "$GITHUB_REF_NAME" \' \
+    -v second='            --repo "$GITHUB_REPOSITORY" \' \
+    -v third='            --json isDraft \' \
+    -v fourth="            --jq '.isDraft')" '
+      $0 == first {
+        getline
+        if ($0 != second) next
+        getline
+        if ($0 != third) next
+        getline
+        if ($0 == fourth) found = 1
+      }
+      END { exit(found ? 0 : 1) }
+    ' <<< "$macos_job"
+}
+
+has_macos_upload() {
+  awk \
+    -v first='          gh release upload "$GITHUB_REF_NAME" \' \
+    -v second='            cfdrop-macos-arm64.tar.gz \' \
+    -v third='            --repo "$GITHUB_REPOSITORY" \' \
+    -v fourth='            --clobber' '
+      $0 == first {
+        getline
+        if ($0 != second) next
+        getline
+        if ($0 != third) next
+        getline
+        if ($0 == fourth) found = 1
+      }
+      END { exit(found ? 0 : 1) }
+    ' <<< "$macos_job"
+}
+
 if ! grep -Eq '^      - uses: actions/checkout@v4$' <<< "$create_release_job" ||
   ! grep -Eq '^          tests/release_workflow_contract\.sh$' <<< "$create_release_job" ||
   ! grep -Eq '^          tests/release_workflow_contract_mutation\.sh$' <<< "$create_release_job"; then
@@ -39,5 +77,22 @@ fi
 
 if grep -Eq 'oablab-macos|macmini runner|no gh CLI on this runner' "$workflow"; then
   echo 'release workflow still contains the retired self-hosted runner contract' >&2
+  exit 1
+fi
+
+if grep -Eq 'releases/tags/|uploads\.github\.com|upload_url|\|[[:space:]]*python3' <<< "$active_macos_job"; then
+  echo 'macOS release upload must not use the draft-incompatible REST metadata path' >&2
+  exit 1
+fi
+
+if ! has_macos_draft_check ||
+  ! grep -Fqx '          if [ "$release_is_draft" != "true" ]; then' <<< "$macos_job" ||
+  ! grep -Fqx '            echo "::error::refusing to upload assets to a published release"' <<< "$macos_job"; then
+  echo 'macOS release upload must verify the draft with gh before uploading' >&2
+  exit 1
+fi
+
+if ! has_macos_upload; then
+  echo 'macOS release upload must use the guarded gh upload contract' >&2
   exit 1
 fi
