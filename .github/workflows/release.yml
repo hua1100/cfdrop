@@ -51,9 +51,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          tar -czf ${{ matrix.asset }}.tar.gz -C target/${{ matrix.target }}/release cfdrop
-          gh release upload "$GITHUB_REF_NAME" ${{ matrix.asset }}.tar.gz \
-            --repo "$GITHUB_REPOSITORY" --clobber
+          tar -czf "${{ matrix.asset }}.tar.gz" -C "target/${{ matrix.target }}/release" cfdrop
+          sha256sum "${{ matrix.asset }}.tar.gz" > "${{ matrix.asset }}.tar.gz.sha256"
+          gh release upload "$GITHUB_REF_NAME" \
+            "${{ matrix.asset }}.tar.gz" "${{ matrix.asset }}.tar.gz.sha256" \
+            --repo "$GITHUB_REPOSITORY"
 
   macos:
     needs: create-release
@@ -86,3 +88,28 @@ jobs:
             "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets?name=cfdrop-macos-arm64.tar.gz" \
             -o /dev/null
           echo "uploaded cfdrop-macos-arm64.tar.gz to release $RELEASE_ID"
+
+  verify-release:
+    needs: [linux, macos]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify immutable Linux release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          release_assets=$(gh release view "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json assets \
+            --jq '.assets[].name')
+          printf '%s\n' "$release_assets"
+          for required_asset in \
+            cfdrop-linux-amd64.tar.gz \
+            cfdrop-linux-amd64.tar.gz.sha256 \
+            cfdrop-linux-arm64.tar.gz \
+            cfdrop-linux-arm64.tar.gz.sha256
+          do
+            if ! grep -Fxq "$required_asset" <<< "$release_assets"; then
+              echo "::error::missing release asset: $required_asset"
+              exit 1
+            fi
+          done

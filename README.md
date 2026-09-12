@@ -2,7 +2,7 @@
 
 Deploy a directory to a **temporary Cloudflare account** — no signup, no wrangler, no Node — and get a live `workers.dev` URL for browsing. Self-contained Rust CLI.
 
-Current release: `0.7.0`.
+Current release: `0.8.0`.
 
 ```
 cfdrop deploy --directory path/to/dir/
@@ -48,6 +48,52 @@ The temporary account is cached in the OS config dir (`~/Library/Application Sup
 - `--auth user:pass` protects the site with HTTP Basic Auth: deploys a small guard Worker in front of the assets (`run_worker_first`) that returns 401 unless the browser sends the matching credential. Note the credential is baked into the Worker script — fine for a 60-minute preview, not a real security boundary. For long-lived sites, claim the account and use [Cloudflare Access](https://developers.cloudflare.com/cloudflare-one/policies/access/) instead (not available on temporary accounts).
 - `--md` treats the directory as Markdown: every `*.md` is converted (pulldown-cmark: tables, strikethrough, footnotes, task lists) into a dark-theme, mobile-first HTML page — vertical scrolling only, wide tables scroll inside their own block. Non-markdown files are copied through. Unless an `index.md`/`index.html` exists, an index page listing all pages as tappable cards is generated. Titles come from the first `# heading`.
 - Worker name defaults to the sanitized directory name
+
+## Signed report links
+
+Use signed mode for a self-contained static report that must only be readable
+through a short-lived bearer URL:
+
+```bash
+cfdrop deploy -d ./report -n qm-report -y --fresh \
+  --signed-link --expires-in-seconds 3600 \
+  --min-valid-for-seconds 300 --json
+```
+
+On success, stdout is exactly one JSON line with these three fields (progress is
+written to stderr):
+
+```json
+{"deployment_url":"https://qm-report.example.workers.dev","access_url":"https://qm-report.example.workers.dev/_cfdrop/REDACTED/","expires_at":"2026-09-12T12:55:00+00:00"}
+```
+
+`access_url` is a bearer credential: anyone it is forwarded to can read the
+report until it expires, so do not put it in logs or public messages. Requests
+with a missing or changed token receive `403`; the correct URL receives `410`
+after expiry. The reported expiry is the requested lifetime capped by the
+temporary account expiry (with a safety margin), and deployment fails instead
+of returning a link when the requested minimum remaining lifetime cannot be
+met.
+
+Signed reports use a restrictive Worker policy with no third-party assets or
+scripts. Signed mode requires `--fresh` and cannot be combined with `--auth`,
+`--notify`, or `--md`.
+
+## Linux release assets
+
+Release `v0.8.0` publishes these immutable musl archives and checksum sidecars:
+
+- `cfdrop-linux-amd64.tar.gz`
+- `cfdrop-linux-amd64.tar.gz.sha256`
+- `cfdrop-linux-arm64.tar.gz`
+- `cfdrop-linux-arm64.tar.gz.sha256`
+
+Pin automation to a versioned URL such as
+`https://github.com/hua1100/cfdrop/releases/download/v0.8.0/cfdrop-linux-amd64.tar.gz`.
+The downloaded `.sha256` sidecar is useful for manual integrity checks, but it
+is not an independent trust root. QM runtime consumers must pin the expected
+SHA-256 digest in trusted configuration rather than downloading the archive
+and its expected digest from the same release.
 
 ## Temporary report comments
 
