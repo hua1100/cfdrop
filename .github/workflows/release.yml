@@ -9,13 +9,17 @@ permissions:
 
 # Assets are uploaded directly to the GitHub release from each build job —
 # release assets do not count against the org's Actions artifact storage
-# quota (which actions/upload-artifact hit). The macmini runner has no gh
-# CLI, so the macos job uploads via curl + the REST API.
+# quota (which actions/upload-artifact hit).
 
 jobs:
   create-release:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+      - name: Validate release workflow contract
+        run: |
+          tests/release_workflow_contract.sh
+          tests/release_workflow_contract_mutation.sh
       - name: Create draft release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -83,10 +87,10 @@ jobs:
 
   macos:
     needs: create-release
-    runs-on: oablab-macos
+    runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
-      - name: Test, build, upload (curl — no gh CLI on this runner)
+      - name: Test, build, upload
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
