@@ -15,6 +15,11 @@ jobs:
   create-release:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+      - name: Validate release workflow contract
+        run: |
+          tests/release_workflow_contract.sh
+          tests/release_workflow_contract_mutation.sh
       - name: Create draft release
         env:
           GH_TOKEN: ${{ github.token }}
