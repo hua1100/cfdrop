@@ -29,15 +29,17 @@ jobs:
               echo "::error::release $GITHUB_REF_NAME already exists and is not a draft"
               exit 1
             fi
-            echo "draft release $GITHUB_REF_NAME already exists"
-          else
-            gh release create "$GITHUB_REF_NAME" \
+            gh release delete "$GITHUB_REF_NAME" \
               --repo "$GITHUB_REPOSITORY" \
-              --title "cfdrop $GITHUB_REF_NAME" \
-              --generate-notes \
-              --verify-tag \
-              --draft
+              --yes
+            echo "deleted incomplete draft release $GITHUB_REF_NAME"
           fi
+          gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "cfdrop $GITHUB_REF_NAME" \
+            --generate-notes \
+            --verify-tag \
+            --draft
 
   linux:
     needs: create-release
