@@ -48,6 +48,43 @@ expect_rejected 'commented draft-check decoy'
 
 awk '
   /^  macos:$/ { in_macos = 1 }
+  in_macos && /^  [A-Za-z0-9_-]+:$/ && $0 != "  macos:" { in_macos = 0 }
+  in_macos && /^            exit 1$/ {
+    print "            # exit 1"
+    changed = 1
+    next
+  }
+  { print }
+  END { if (!changed) exit 2 }
+' "$workflow" > "$mutated"
+
+expect_rejected 'commented fail-closed exit decoy'
+
+awk '
+  /^  macos:$/ { in_macos = 1 }
+  in_macos && /^  [A-Za-z0-9_-]+:$/ && $0 != "  macos:" { in_macos = 0 }
+  in_macos && /release_is_draft=\$\(gh release view/ && !inserted {
+    print "          gh release upload \"$GITHUB_REF_NAME\" \\"
+    print "            cfdrop-macos-arm64.tar.gz \\"
+    print "            --repo \"$GITHUB_REPOSITORY\" \\"
+    print "            --clobber"
+    inserted = 1
+  }
+  in_macos && /^          gh release upload \"\$GITHUB_REF_NAME\" \\$/ {
+    getline
+    getline
+    getline
+    removed = 1
+    next
+  }
+  { print }
+  END { if (!inserted || !removed) exit 2 }
+' "$workflow" > "$mutated"
+
+expect_rejected 'upload before the draft guard'
+
+awk '
+  /^  macos:$/ { in_macos = 1 }
   in_macos && /gh release upload \"\$GITHUB_REF_NAME\"/ {
     print "          echo upload skipped"
     print "          # gh release upload \"$GITHUB_REF_NAME\" \\"

@@ -36,6 +36,24 @@ has_macos_draft_check() {
     ' <<< "$macos_job"
 }
 
+has_macos_fail_closed_guard() {
+  awk \
+    -v first='          if [ "$release_is_draft" != "true" ]; then' \
+    -v second='            echo "::error::refusing to upload assets to a published release"' \
+    -v third='            exit 1' \
+    -v fourth='          fi' '
+      $0 == first {
+        getline
+        if ($0 != second) next
+        getline
+        if ($0 != third) next
+        getline
+        if ($0 == fourth) found = 1
+      }
+      END { exit(found ? 0 : 1) }
+    ' <<< "$macos_job"
+}
+
 has_macos_upload() {
   awk \
     -v first='          gh release upload "$GITHUB_REF_NAME" \' \
@@ -52,6 +70,11 @@ has_macos_upload() {
       }
       END { exit(found ? 0 : 1) }
     ' <<< "$macos_job"
+}
+
+macos_line_number() {
+  local exact_line=$1
+  awk -v exact_line="$exact_line" '$0 == exact_line { print NR; exit }' <<< "$active_macos_job"
 }
 
 if ! grep -Eq '^      - uses: actions/checkout@v4$' <<< "$create_release_job" ||
@@ -85,14 +108,25 @@ if grep -Eq 'releases/tags/|uploads\.github\.com|upload_url|\|[[:space:]]*python
   exit 1
 fi
 
-if ! has_macos_draft_check ||
-  ! grep -Fqx '          if [ "$release_is_draft" != "true" ]; then' <<< "$macos_job" ||
-  ! grep -Fqx '            echo "::error::refusing to upload assets to a published release"' <<< "$macos_job"; then
+if ! has_macos_draft_check || ! has_macos_fail_closed_guard; then
   echo 'macOS release upload must verify the draft with gh before uploading' >&2
   exit 1
 fi
 
 if ! has_macos_upload; then
   echo 'macOS release upload must use the guarded gh upload contract' >&2
+  exit 1
+fi
+
+draft_check_line=$(macos_line_number '          release_is_draft=$(gh release view "$GITHUB_REF_NAME" \')
+guard_line=$(macos_line_number '          if [ "$release_is_draft" != "true" ]; then')
+guard_end_line=$(macos_line_number '          fi')
+archive_line=$(macos_line_number '          tar -czf cfdrop-macos-arm64.tar.gz -C target/release cfdrop')
+upload_line=$(macos_line_number '          gh release upload "$GITHUB_REF_NAME" \')
+
+if [[ -z "$draft_check_line" || -z "$guard_line" || -z "$guard_end_line" ||
+  -z "$archive_line" || -z "$upload_line" ]] ||
+  (( draft_check_line >= guard_line || guard_end_line >= archive_line || archive_line >= upload_line )); then
+  echo 'macOS release archive and upload must run only after the complete draft guard' >&2
   exit 1
 fi
