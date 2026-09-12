@@ -94,9 +94,25 @@ function expired() {{
   return page("This report link has expired.", 410);
 }}
 
-function secured(response) {{
+function prefixedLocation(location, requestUrl) {{
+  let target;
+  try {{
+    target = new URL(location, requestUrl.origin);
+  }} catch {{
+    return location;
+  }}
+  if (target.origin !== requestUrl.origin) return location;
+  if (target.pathname !== PREFIX && !target.pathname.startsWith(`${{PREFIX}}/`)) {{
+    target.pathname = `${{PREFIX}}${{target.pathname}}`;
+  }}
+  return `${{target.pathname}}${{target.search}}${{target.hash}}`;
+}}
+
+function secured(response, requestUrl) {{
   const headers = new Headers(response.headers);
   for (const [name, value] of Object.entries(SECURITY_HEADERS)) headers.set(name, value);
+  const location = headers.get("Location");
+  if (location) headers.set("Location", prefixedLocation(location, requestUrl));
   return new Response(response.body, {{
     status: response.status,
     statusText: response.statusText,
@@ -106,14 +122,14 @@ function secured(response) {{
 
 export default {{
   async fetch(request, env) {{
-    if (Date.now() >= EXPIRES_AT) return expired(); // status: 410
     const url = new URL(request.url);
     if (url.pathname !== PREFIX && !url.pathname.startsWith(`${{PREFIX}}/`)) {{
       return forbidden();
     }}
+    if (Date.now() >= EXPIRES_AT) return expired(); // status: 410
     url.pathname = url.pathname.slice(PREFIX.length) || "/";
     const response = await env.ASSETS.fetch(new Request(url, request));
-    return secured(response);
+    return secured(response, url);
   }},
 }};
 "#
@@ -169,5 +185,39 @@ mod tests {
         assert!(script.contains("status: 410"));
         assert!(script.contains("Referrer-Policy"));
         assert!(script.contains("Cache-Control"));
+    }
+
+    #[test]
+    fn guard_validates_bearer_path_before_expiry() {
+        let script = signed_worker_script("A".repeat(43).as_str(), 1_789_200_000).unwrap();
+        let fetch = script.find("async fetch(request, env)").unwrap();
+        let handler = &script[fetch..];
+        let path = handler.find("const url = new URL(request.url)").unwrap();
+        let forbidden = handler.find("return forbidden()").unwrap();
+        let expiry = handler.find("Date.now() >= EXPIRES_AT").unwrap();
+
+        assert!(path < forbidden);
+        assert!(forbidden < expiry);
+    }
+
+    #[test]
+    fn guard_prefixes_root_relative_nested_index_redirects() {
+        let script = signed_worker_script("A".repeat(43).as_str(), 1_789_200_000).unwrap();
+
+        assert!(script.contains("function prefixedLocation(location, requestUrl)"));
+        assert!(script.contains("new URL(location, requestUrl.origin)"));
+        assert!(script.contains("target.pathname = `${PREFIX}${target.pathname}`"));
+        assert!(
+            script.contains("headers.set(\"Location\", prefixedLocation(location, requestUrl))")
+        );
+    }
+
+    #[test]
+    fn guard_prefixes_same_origin_html_canonical_redirects() {
+        let script = signed_worker_script("A".repeat(43).as_str(), 1_789_200_000).unwrap();
+
+        assert!(script.contains("target.origin !== requestUrl.origin"));
+        assert!(script.contains("!target.pathname.startsWith(`${PREFIX}/`)"));
+        assert!(script.contains("`${target.pathname}${target.search}${target.hash}`"));
     }
 }

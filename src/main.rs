@@ -56,7 +56,7 @@ enum Command {
         #[arg(long)]
         notify: bool,
         /// Protect every asset behind a temporary bearer URL
-        #[arg(long, conflicts_with = "auth")]
+        #[arg(long, conflicts_with_all = ["auth", "notify", "md"])]
         signed_link: bool,
         /// Maximum lifetime of a signed link
         #[arg(
@@ -511,6 +511,36 @@ mod cli_tests {
             }
             _ => panic!("expected deploy"),
         }
+    }
+
+    #[test]
+    fn rejects_signed_notify_deploy() {
+        let result = Cli::try_parse_from([
+            "cfdrop",
+            "deploy",
+            "-d",
+            "site",
+            "--fresh",
+            "--signed-link",
+            "--notify",
+        ]);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn rejects_signed_markdown_deploy() {
+        let result = Cli::try_parse_from([
+            "cfdrop",
+            "deploy",
+            "-d",
+            "site",
+            "--fresh",
+            "--signed-link",
+            "--md",
+        ]);
+
+        assert!(result.is_err());
     }
 
     #[test]
