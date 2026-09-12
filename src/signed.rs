@@ -40,7 +40,7 @@ pub fn effective_expiry(
     let account_deadline = account_expires_at
         .checked_sub_signed(safety_margin)
         .context("temporary-account expiry is out of range")?;
-    let expires_at = requested_expiry.min(account_deadline);
+    let expires_at = whole_second_expiry(requested_expiry.min(account_deadline))?;
     let minimum_expiry = now
         .checked_add_signed(minimum_lifetime)
         .context("minimum signed-link expiry is out of range")?;
@@ -55,6 +55,7 @@ pub fn ensure_minimum_remaining_lifetime(
     expires_at: DateTime<Utc>,
     min_valid_for_seconds: u64,
 ) -> Result<()> {
+    let expires_at = whole_second_expiry(expires_at)?;
     let minimum_lifetime = seconds(min_valid_for_seconds, "minimum lifetime")?;
     let minimum_expiry = now
         .checked_add_signed(minimum_lifetime)
@@ -63,6 +64,11 @@ pub fn ensure_minimum_remaining_lifetime(
         bail!("signed link no longer has the minimum required lifetime");
     }
     Ok(())
+}
+
+fn whole_second_expiry(expires_at: DateTime<Utc>) -> Result<DateTime<Utc>> {
+    DateTime::<Utc>::from_timestamp(expires_at.timestamp(), 0)
+        .context("signed-link expiry is out of range")
 }
 
 pub fn access_url(deployment_url: &str, token: &str) -> Result<String> {
@@ -224,6 +230,26 @@ mod tests {
     fn rejects_insufficient_remaining_lifetime() {
         let now = Utc::now();
         assert!(effective_expiry(now, 3600, now + Duration::seconds(200), 60, 300).is_err());
+    }
+
+    #[test]
+    fn rejects_fractional_expiry_that_worker_truncates_below_minimum() {
+        let now =
+            Utc.with_ymd_and_hms(2026, 9, 12, 12, 0, 0).unwrap() + Duration::milliseconds(900);
+        let account_expires_at = now + Duration::seconds(360);
+
+        assert!(effective_expiry(now, 3600, account_expires_at, 60, 300).is_err());
+    }
+
+    #[test]
+    fn effective_expiry_matches_worker_second_precision() {
+        let now =
+            Utc.with_ymd_and_hms(2026, 9, 12, 12, 0, 0).unwrap() + Duration::milliseconds(900);
+        let account_expires_at = now + Duration::seconds(361);
+
+        let expires_at = effective_expiry(now, 3600, account_expires_at, 60, 300).unwrap();
+
+        assert_eq!(expires_at.timestamp_subsec_nanos(), 0);
     }
 
     #[test]
