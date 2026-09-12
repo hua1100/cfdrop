@@ -115,6 +115,13 @@ function expired() {{
   return page("This report link has expired.", 410);
 }}
 
+function prefixRedirect(url) {{
+  return new Response(null, {{
+    status: 308,
+    headers: {{ ...SECURITY_HEADERS, "Location": `${{PREFIX}}/${{url.search}}` }},
+  }});
+}}
+
 function prefixedLocation(location, requestUrl) {{
   let target;
   try {{
@@ -148,6 +155,7 @@ export default {{
       return forbidden();
     }}
     if (Date.now() >= EXPIRES_AT) return expired(); // status: 410
+    if (url.pathname === PREFIX) return prefixRedirect(url);
     url.pathname = url.pathname.slice(PREFIX.length) || "/";
     const response = await env.ASSETS.fetch(new Request(url, request));
     return secured(response, url);
@@ -282,6 +290,27 @@ mod tests {
 
         assert!(path < forbidden);
         assert!(forbidden < expiry);
+    }
+
+    #[test]
+    fn exact_bearer_prefix_redirects_to_trailing_slash_after_expiry_check() {
+        let script = signed_worker_script("A".repeat(43).as_str(), 1_789_200_000).unwrap();
+        let fetch = script.find("async fetch(request, env)").unwrap();
+        let handler = &script[fetch..];
+        let forbidden = handler.find("return forbidden()").unwrap();
+        let expiry = handler.find("Date.now() >= EXPIRES_AT").unwrap();
+        let redirect = handler
+            .find("if (url.pathname === PREFIX) return prefixRedirect(url)")
+            .unwrap();
+        let assets = handler.find("env.ASSETS.fetch").unwrap();
+
+        assert!(forbidden < expiry);
+        assert!(expiry < redirect);
+        assert!(redirect < assets);
+        assert!(script.contains("function prefixRedirect(url)"));
+        assert!(script.contains("status: 308"));
+        assert!(script.contains("headers: { ...SECURITY_HEADERS"));
+        assert!(script.contains(r#""Location": `${PREFIX}/${url.search}`"#));
     }
 
     #[test]
