@@ -97,22 +97,19 @@ jobs:
           export PATH="$HOME/.cargo/bin:$PATH"
           cargo test
           cargo build --release
-          tar -czf cfdrop-macos-arm64.tar.gz -C target/release cfdrop
-          RELEASE_METADATA=$(curl -sf -H "Authorization: Bearer $GH_TOKEN" \
-            "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/tags/$GITHUB_REF_NAME" \
-            | python3 -c 'import json,sys; r=json.load(sys.stdin); print(r["id"], str(r["draft"]).lower())')
-          read -r RELEASE_ID RELEASE_IS_DRAFT <<< "$RELEASE_METADATA"
-          if [ "$RELEASE_IS_DRAFT" != "true" ]; then
-            echo "::error::refusing to upload macOS asset to a published release"
+          release_is_draft=$(gh release view "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json isDraft \
+            --jq '.isDraft')
+          if [ "$release_is_draft" != "true" ]; then
+            echo "::error::refusing to upload assets to a published release"
             exit 1
           fi
-          curl -sf -X POST \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -H "Content-Type: application/gzip" \
-            --data-binary @cfdrop-macos-arm64.tar.gz \
-            "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets?name=cfdrop-macos-arm64.tar.gz" \
-            -o /dev/null
-          echo "uploaded cfdrop-macos-arm64.tar.gz to release $RELEASE_ID"
+          tar -czf cfdrop-macos-arm64.tar.gz -C target/release cfdrop
+          gh release upload "$GITHUB_REF_NAME" \
+            cfdrop-macos-arm64.tar.gz \
+            --repo "$GITHUB_REPOSITORY" \
+            --clobber
 
   publish-release:
     needs: [linux, macos]
