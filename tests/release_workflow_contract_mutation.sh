@@ -4,11 +4,19 @@ set -euo pipefail
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 workflow="$repo_root/.github/workflows/release.yml"
 mutated=$(mktemp)
+system_awk=$(command -v awk)
 
 cleanup() {
   rm -f "$mutated"
 }
 trap cleanup EXIT
+
+if ! CFDROP_SYSTEM_AWK="$system_awk" \
+  PATH="$repo_root/tests/fixtures/mawk-bin:$PATH" \
+  "$repo_root/tests/release_workflow_contract.sh" "$workflow"; then
+  echo 'release workflow contract must pass with mawk-compatible -v escaping' >&2
+  exit 1
+fi
 
 expect_rejected() {
   local description=$1
