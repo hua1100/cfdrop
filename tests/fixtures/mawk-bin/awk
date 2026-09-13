@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${CFDROP_SYSTEM_AWK:?CFDROP_SYSTEM_AWK must point to the system awk}"
+
+rewritten_args=()
+assignment_follows=false
+for argument in "$@"; do
+  if $assignment_follows; then
+    # Ubuntu's mawk consumes a trailing backslash in a -v assignment value.
+    # Reproduce that behavior without requiring mawk on macOS.
+    if [[ "$argument" == *\\ ]]; then
+      argument=${argument%\\}
+    fi
+    assignment_follows=false
+  elif [[ "$argument" == "-v" ]]; then
+    assignment_follows=true
+  fi
+  rewritten_args+=("$argument")
+done
+
+exec "$CFDROP_SYSTEM_AWK" "${rewritten_args[@]}"

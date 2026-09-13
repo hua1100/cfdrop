@@ -18,63 +18,66 @@ create_release_job=$(job_block create-release)
 
 active_macos_job=$(sed '/^[[:space:]]*#/d' <<< "$macos_job")
 
+has_exact_sequence() {
+  local content=$1
+  shift
+  local expected=("$@")
+  local expected_count=${#expected[@]}
+  local matched=0
+  local line
+
+  while IFS= read -r line; do
+    if [[ "$line" == "${expected[$matched]}" ]]; then
+      ((matched += 1))
+      if ((matched == expected_count)); then
+        return 0
+      fi
+    elif [[ "$line" == "${expected[0]}" ]]; then
+      matched=1
+    else
+      matched=0
+    fi
+  done <<< "$content"
+
+  return 1
+}
+
 has_macos_draft_check() {
-  awk \
-    -v first='          release_is_draft=$(gh release view "$GITHUB_REF_NAME" \' \
-    -v second='            --repo "$GITHUB_REPOSITORY" \' \
-    -v third='            --json isDraft \' \
-    -v fourth="            --jq '.isDraft')" '
-      $0 == first {
-        getline
-        if ($0 != second) next
-        getline
-        if ($0 != third) next
-        getline
-        if ($0 == fourth) found = 1
-      }
-      END { exit(found ? 0 : 1) }
-    ' <<< "$macos_job"
+  has_exact_sequence "$macos_job" \
+    '          release_is_draft=$(gh release view "$GITHUB_REF_NAME" \' \
+    '            --repo "$GITHUB_REPOSITORY" \' \
+    '            --json isDraft \' \
+    "            --jq '.isDraft')"
 }
 
 has_macos_fail_closed_guard() {
-  awk \
-    -v first='          if [ "$release_is_draft" != "true" ]; then' \
-    -v second='            echo "::error::refusing to upload assets to a published release"' \
-    -v third='            exit 1' \
-    -v fourth='          fi' '
-      $0 == first {
-        getline
-        if ($0 != second) next
-        getline
-        if ($0 != third) next
-        getline
-        if ($0 == fourth) found = 1
-      }
-      END { exit(found ? 0 : 1) }
-    ' <<< "$macos_job"
+  has_exact_sequence "$macos_job" \
+    '          if [ "$release_is_draft" != "true" ]; then' \
+    '            echo "::error::refusing to upload assets to a published release"' \
+    '            exit 1' \
+    '          fi'
 }
 
 has_macos_upload() {
-  awk \
-    -v first='          gh release upload "$GITHUB_REF_NAME" \' \
-    -v second='            cfdrop-macos-arm64.tar.gz \' \
-    -v third='            --repo "$GITHUB_REPOSITORY" \' \
-    -v fourth='            --clobber' '
-      $0 == first {
-        getline
-        if ($0 != second) next
-        getline
-        if ($0 != third) next
-        getline
-        if ($0 == fourth) found = 1
-      }
-      END { exit(found ? 0 : 1) }
-    ' <<< "$macos_job"
+  has_exact_sequence "$macos_job" \
+    '          gh release upload "$GITHUB_REF_NAME" \' \
+    '            cfdrop-macos-arm64.tar.gz \' \
+    '            --repo "$GITHUB_REPOSITORY" \' \
+    '            --clobber'
 }
 
 macos_line_number() {
   local exact_line=$1
-  awk -v exact_line="$exact_line" '$0 == exact_line { print NR; exit }' <<< "$active_macos_job"
+  local line
+  local line_number=0
+
+  while IFS= read -r line; do
+    ((line_number += 1))
+    if [[ "$line" == "$exact_line" ]]; then
+      printf '%s\n' "$line_number"
+      return 0
+    fi
+  done <<< "$active_macos_job"
 }
 
 if ! grep -Eq '^      - uses: actions/checkout@v4$' <<< "$create_release_job" ||
